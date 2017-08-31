@@ -1,8 +1,5 @@
 # some-spot-analysis
-image processing for spots in images
-
-## Example Usage
-See [exampleUsage.sh](/exampleUsage.sh)
+Image processing for spots in images from SDDS files (uses https://github.com/greyltc/python-sdds)
 
 ## General Usage
 ```
@@ -19,3 +16,5 @@ optional arguments:
   --save-image  Save data .pgm images to /tmp/pgms/
   --draw-plot   Draw data plot or each file processed
 ```
+## Example Usage
+See [exampleUsage.sh](/exampleUsage.sh)
