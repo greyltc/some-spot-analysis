@@ -1,8 +1,10 @@
 # some-spot-analysis
 image processing for spots in images
 
+## Example Usage
+See [exampleUsage.sh](/exampleUsage.sh)
 
-### Usage
+## General Usage
 ```
 $ ./analyze-spots.py -h
 usage: analyze-spots.py [-h] [--save-image] [--draw-plot] input [input ...]
