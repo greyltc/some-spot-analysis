@@ -60,9 +60,11 @@ for f in args.input:
     fileName = os.path.basename(f.name)
     print('Processing', fullPath, '...')
     ds = ssds(f) # use python sdds library to parse the file
-    xRes = ds.pageData[0]['parameters']['nbPtsInSet1']['value']
-    yRes = ds.pageData[0]['parameters']['nbPtsInSet2']['value']
-    surface1D = ds.pageData[0]['arrays']['imageSet']['value'][0] # grab the image data here
+    tehParams = ds.pageData[0]['parameters']
+    tehArrays = ds.pageData[0]['arrays']
+    xRes = tehParams['nbPtsInSet1']['value']
+    yRes = tehParams['nbPtsInSet2']['value']
+    surface1D = tehArrays['imageSet']['value'][0] # grab the image data here
     surface2D = surface1D.reshape([yRes,xRes])
 
     # possibly save the surface to a pgm file in /tmp for inspection
@@ -134,10 +136,15 @@ for f in args.input:
     r2 = 1 - (ss_res / ss_tot)
     
     logMessages = StringIO()
-    parameter = "cycleTime"
-    print(parameter,'=',ds.pageData[0]['parameters'][parameter]['value'].rstrip(), file=logMessages)
-    parameter = "acqTime"
-    print(parameter,'=',ds.pageData[0]['parameters'][parameter]['value'].rstrip(), file=logMessages)
+    
+    parametersToPrint = ('cycleTime', 'acqTime', 'screenSelect', 'filterSelect')
+    
+    for parameter in parametersToPrint:
+        val = tehParams[parameter]['value']
+        if type(val) is str:
+            val = val.rstrip()
+        print(parameter,'=',val, file=logMessages)
+    
     print("Green Line Cut R^2 =", r2, file=logMessages)
     print("Peak =", amplitude+baseline, file=logMessages)
     print("====Fit Parameters====", file=logMessages)
