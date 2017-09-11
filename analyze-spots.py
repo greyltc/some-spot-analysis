@@ -6,10 +6,10 @@ import os
 import tempfile
 import argparse
 import numpy as np
-import mpmath
+#import mpmath
 import matplotlib.pyplot as plt
 from sdds import SDDS as ssds
-from math import sqrt
+#from math import sqrt
 from scipy import optimize as opt
 from scipy import interpolate
 from io import StringIO
