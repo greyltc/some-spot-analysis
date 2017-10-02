@@ -6,10 +6,10 @@ import os
 import tempfile
 import argparse
 import numpy as np
-import mpmath
+#import mpmath
 import matplotlib.pyplot as plt
 from sdds import SDDS as ssds
-from math import sqrt
+#from math import sqrt
 from scipy import optimize as opt
 from scipy import interpolate
 from io import StringIO
@@ -82,9 +82,11 @@ for f in args.input:
     fileName = os.path.basename(f.name)
     print('Processing', fullPath, '...')
     ds = ssds(f) # use python sdds library to parse the file
-    xRes = ds.pageData[0]['parameters']['nbPtsInSet1']['value']
-    yRes = ds.pageData[0]['parameters']['nbPtsInSet2']['value']
-    surface1D = ds.pageData[0]['arrays']['imageSet']['value'][0] # grab the image data here
+    tehParams = ds.pageData[0]['parameters']
+    tehArrays = ds.pageData[0]['arrays']
+    xRes = tehParams['nbPtsInSet1']['value']
+    yRes = tehParams['nbPtsInSet2']['value']
+    surface1D = tehArrays['imageSet']['value'][0] # grab the image data here
     surface2D = surface1D.reshape([yRes,xRes])
 
     screenSelect = ds.pageData[0]['parameters']['screenSelect']['value']
@@ -175,8 +177,14 @@ for f in args.input:
     acqTimeStamp = acqTime.timestamp() + twoHrTimezoneOffset
     
     logMessages = StringIO()
-    print('cycleTime =', cycleTime, file=logMessages)
-    print('acqTime =', acqTime, file=logMessages)
+    parametersToPrint = ('cycleTime', 'acqTime', 'screenSelect', 'filterSelect')
+    
+    for parameter in parametersToPrint:
+        val = tehParams[parameter]['value']
+        if type(val) is str:
+            val = val.rstrip()
+        print(parameter,'=',val, file=logMessages)
+    
     print("Green Line Cut R^2 =", r2, file=logMessages)
     peak = amplitude+baseline
     print("Peak =", peak, file=logMessages)
