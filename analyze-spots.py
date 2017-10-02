@@ -13,10 +13,18 @@ from math import sqrt
 from scipy import optimize as opt
 from scipy import interpolate
 from io import StringIO
+from datetime import datetime
+import csv
+import array
+
+class Object(object):
+    pass
 
 parser = argparse.ArgumentParser(description='Spot analysis on image data taken from SDDS files.')
 parser.add_argument('--save-image', dest='saveImage', action='store_true', default=False, help="Save data .pgm images to /tmp/pgms/")
 parser.add_argument('--draw-plot', dest='drawPlot', action='store_true', default=False, help="Draw data plot or each file processed")
+parser.add_argument('--csv-out', type=argparse.FileType('w'), help="Save analysis data to csv file")
+parser.add_argument('--correlate-proton-intensities', type=argparse.FileType('r'), help="Read proton intensities from this file")
 parser.add_argument('input', type=argparse.FileType('rb'), nargs='+', help="File(s) to process")
 args = parser.parse_args()
 
@@ -54,6 +62,20 @@ def moments(data):
     height = data.max()
     return height, x, y, width_x, width_y
 
+fieldNames = ['#File Name', 'Spot Image', 'Cycle Time', 'Acquisition Time', 'R^2', 'Peak', 'Amplitude', 'Center X', 'Center Y', 'Sigma X', 'Sigma Y', 'Rotation', 'Baseline','Screen Select','Filter Select','Acq. Counter', 'Acq. Desc.','Observables','OffsetCalSet1','OffsetCalSet2']
+data = Object()
+for fieldName in fieldNames:
+    setattr(data, fieldName, np.array([]))
+
+if args.csv_out is not None:
+    filename,file_ext = os.path.splitext(args.csv_out.name)
+    if file_ext != '.csv':
+        print("Error: csv file name must end in .csv")
+        exit(1)
+    csvWriter = csv.DictWriter(args.csv_out,fieldnames=fieldNames)
+    csvWriter.writeheader()
+    args.csv_out.flush()
+    
 # loop through each file in the input
 for f in args.input:
     fullPath = f.name
@@ -64,6 +86,14 @@ for f in args.input:
     yRes = ds.pageData[0]['parameters']['nbPtsInSet2']['value']
     surface1D = ds.pageData[0]['arrays']['imageSet']['value'][0] # grab the image data here
     surface2D = surface1D.reshape([yRes,xRes])
+
+    screenSelect = ds.pageData[0]['parameters']['screenSelect']['value']
+    filterSelect = ds.pageData[0]['parameters']['filterSelect']['value']
+    acqCounter = ds.pageData[0]['parameters']['acqCounter']['value']
+    acqDesc = ds.pageData[0]['parameters']['acqDesc']['value']
+    observables = ds.pageData[0]['parameters']['observables']['value']
+    offsetCalSet1 = ds.pageData[0]['arrays']['offsetCalSet1']['value'][0]
+    offsetCalSet2 = ds.pageData[0]['arrays']['offsetCalSet2']['value'][0]
 
     # possibly save the surface to a pgm file in /tmp for inspection
     if args.saveImage:
@@ -76,6 +106,8 @@ for f in args.input:
         pgmHeader = 'P2 {:} {:} {:}'.format(xRes,yRes,pgmMax)    
         np.savetxt(saveFile,surface2D,header=pgmHeader,fmt='%i',comments='')
         print('Saved:', saveFile)
+    else:
+        saveFile = '/dev/null'
 
     # Create x and y grid
     xv = np.linspace(0, xRes-1, xRes)
@@ -133,13 +165,21 @@ for f in args.input:
     ss_tot = np.sum((lineBData - np.mean(lineBData)) ** 2)
     r2 = 1 - (ss_res / ss_tot)
     
+    twoHrTimezoneOffset = 7200 # seconds
+    
+    cycleTime = ds.pageData[0]['parameters']["cycleTime"]['value'].rstrip()[1:-2]
+    cycleTime = datetime.strptime(cycleTime,"%Y/%m/%d %H:%M:%S.%f")
+    cycleTimeStamp = cycleTime.timestamp() + twoHrTimezoneOffset
+    acqTime = ds.pageData[0]['parameters']["acqTime"]['value'].rstrip()[1:-2]
+    acqTime = datetime.strptime(acqTime,"%Y/%m/%d %H:%M:%S.%f")
+    acqTimeStamp = acqTime.timestamp() + twoHrTimezoneOffset
+    
     logMessages = StringIO()
-    parameter = "cycleTime"
-    print(parameter,'=',ds.pageData[0]['parameters'][parameter]['value'].rstrip(), file=logMessages)
-    parameter = "acqTime"
-    print(parameter,'=',ds.pageData[0]['parameters'][parameter]['value'].rstrip(), file=logMessages)
+    print('cycleTime =', cycleTime, file=logMessages)
+    print('acqTime =', acqTime, file=logMessages)
     print("Green Line Cut R^2 =", r2, file=logMessages)
-    print("Peak =", amplitude+baseline, file=logMessages)
+    peak = amplitude+baseline
+    print("Peak =", peak, file=logMessages)
     print("====Fit Parameters====", file=logMessages)
     print("Amplitude =", amplitude, file=logMessages)
     print("Center X =", peakPos[0], file=logMessages)
@@ -153,6 +193,16 @@ for f in args.input:
     messages = logMessages.read()
     print(messages)
     
+    newValues = [fileName, '=HYPERLINK("file://'+saveFile+'")', cycleTimeStamp, acqTimeStamp, r2, peak, amplitude, peakPos[0], peakPos[1], sigma[0], sigma[1], theta, baseline, screenSelect,filterSelect,acqCounter,acqDesc,observables,offsetCalSet1,offsetCalSet2]
+    valuesDict = dict(zip(fieldNames,newValues))
+    
+    for key,value in valuesDict.items():
+        setattr(data,key,np.append(getattr(data, key),value))
+    
+    if args.csv_out is not None:
+        csvWriter.writerow(valuesDict)
+        args.csv_out.flush()
+    
     if args.drawPlot:
         fig, axes = plt.subplots(2, 2,figsize=(8, 6), facecolor='w', edgecolor='k')
         fig.suptitle(fileName, fontsize=10)
@@ -165,17 +215,23 @@ for f in args.input:
         axes[0,0].set_ylim([y.min(), y.max()])
         axes[0,0].set_xlim([x.min(), x.max()])
 
-        axes[1,0].plot(rA,lineAData,'r',rA,lineAFit,'k')
+        axes[1,0].plot(rA,lineAData,'r',label='Data')
+        axes[1,0].plot(rA,lineAFit,'k',label='Fit')
         axes[1,0].set_title('Red Line Cut')
         axes[1,0].set_xlabel('Distance from center of spot [pixels]')
         axes[1,0].set_ylabel('Magnitude [counts]')
         axes[1,0].grid(linestyle='--')
+        handles, labels = axes[1,0].get_legend_handles_labels()
+        axes[1,0].legend(handles, labels)        
 
-        axes[1,1].plot(rB,lineBData,'g',rB,lineBFit,'k')
+        axes[1,1].plot(rB,lineBData,'g',label='Data')
+        axes[1,1].plot(rB,lineBFit,'k',label='Fit')
         axes[1,1].set_title('Green Line Cut')
         axes[1,1].set_xlabel('Distance from center of spot [pixels]')
         axes[1,1].set_ylabel('Magnitude [counts]')
         axes[1,1].grid(linestyle='--')
+        handles, labels = axes[1,1].get_legend_handles_labels()
+        axes[1,1].legend(handles, labels)           
                 
         axes[0,1].axis('off')
         axes[0,1].text(0,0,messages)
@@ -183,3 +239,54 @@ for f in args.input:
 
 if args.drawPlot:
     plt.show(block=True)
+    
+if args.correlate_proton_intensities is not None:
+    iReader = csv.reader(args.correlate_proton_intensities)
+    protonTimes = array.array('d')
+    protonIntensities = array.array('d')
+    for row in iReader:
+        try:
+            protonTime = datetime.strptime(row[0],"%Y-%m-%d %H:%M:%S.%f")
+            protonTimes.append(protonTime.timestamp())
+            protonIntensities.append(float(row[1]))
+        except:
+            pass
+    protonTimes = np.array(protonTimes)
+    protonIntensities = np.array(protonIntensities)
+    proton = array.array('d')
+    tDelta = array.array('d')
+    nFilesProcessed = len(getattr(data,'Cycle Time'))
+    for i in range(nFilesProcessed):
+        cycleDeltas = getattr(data,'Cycle Time')[i] - protonTimes
+        acqDeltas = getattr(data,'Acquisition Time')[i] - protonTimes
+        cycleArgMin = np.argmin(np.abs(cycleDeltas))
+        acqArgMin = np.argmin(np.abs(acqDeltas))
+        #print('Match for cycle      time found at proton entry',cycleArgMin,'with delta',cycleDeltas[cycleArgMin],'s')
+        #print('Match for acqusition time found at proton entry',acqArgMin,'with delta',acqDeltas[acqArgMin],'s')
+        if cycleArgMin != acqArgMin:
+            print("Warning cycle timestamp and acqusition timestamp don't match to the same proton intensity!")
+            print("The proton intensity difference is", protonIntensities[cycleArgMin] - protonIntensities[acqArgMin])
+        proton.append(protonIntensities[acqArgMin])
+        tDelta.append(acqDeltas[acqArgMin])
+    setattr(data,'Proton Intensity',np.array(proton))
+    setattr(data,'Delta from Timber timestamp [s]',np.array(tDelta))
+
+    if args.csv_out is not None:
+        # rewrite the whole csv_out
+        outName = args.csv_out.name
+        args.csv_out.close()
+        fieldNames.append('Proton Intensity')
+        fieldNames.append('Delta from Timber timestamp [s]')        
+        with open(outName, 'w', newline='') as csvfile:
+            newWriter = csv.DictWriter(csvfile,fieldnames=fieldNames)
+            newWriter.writeheader()
+            for i in range(nFilesProcessed):
+                values = []
+                for field in fieldNames:
+                    values.append(getattr(data,field)[i])
+                valuesDict = dict(zip(fieldNames,values))
+                newWriter.writerow(valuesDict)
+            csvfile.flush()
+
+if args.csv_out is not None:
+    args.csv_out.close()
