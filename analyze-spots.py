@@ -22,11 +22,17 @@ class Object(object):
 
 parser = argparse.ArgumentParser(description='Spot analysis on image data taken from SDDS files.')
 parser.add_argument('--save-image', dest='saveImage', action='store_true', default=False, help="Save data .pgm images to /tmp/pgms/")
+parser.add_argument('--save-report', dest='saveReport', action='store_true', default=False, help="Save analysis report .pdfs to /tmp/pdfs/")
 parser.add_argument('--draw-plot', dest='drawPlot', action='store_true', default=False, help="Draw data plot or each file processed")
 parser.add_argument('--csv-out', type=argparse.FileType('w'), help="Save analysis data to csv file")
 parser.add_argument('--correlate-proton-intensities', type=argparse.FileType('r'), help="Read proton intensities from this file")
 parser.add_argument('input', type=argparse.FileType('rb'), nargs='+', help="File(s) to process")
 args = parser.parse_args()
+
+# wheel OD mappings
+mapperOD = Object()
+mapperOD.one = np.array([0,0.7,1,2])
+mapperOD.two = np.array([0,0.3,3,5])
 
 # returns a 1d vector representation of the height at position xy of a 2d gaussian surface where
 # amplitude = gaussian peak height
@@ -62,7 +68,7 @@ def moments(data):
     height = data.max()
     return height, x, y, width_x, width_y
 
-fieldNames = ['#File Name', 'Spot Image', 'Cycle Time', 'Acquisition Time', 'R^2', 'Peak', 'Amplitude', 'Center X', 'Center Y', 'Sigma X', 'Sigma Y', 'Rotation', 'Baseline','Screen Select','Filter Select','Acq. Counter', 'Acq. Desc.','Observables','OffsetCalSet1','OffsetCalSet2']
+fieldNames = ['#File Name','Fit Report', 'Spot Image', 'Device Name', 'First Lamp', 'Second Lamp', 'Cycle Time', 'Cycle Timestamp', 'Acquisition Time', 'Acquisition Timestamp','Time in Cycle [ms]', 'R^2', 'Peak', 'Amplitude', 'Effective Amplitude', 'Center X', 'Center Y', 'Sigma X', 'Sigma Y', 'Rotation', 'Baseline','Screen Select "1"','Filter Select "2"','Optical Density', 'Acq. Counter', 'Acq. Desc.','Observables','OffsetCalSet1','OffsetCalSet2', 'Video Gain']
 data = Object()
 for fieldName in fieldNames:
     setattr(data, fieldName, np.array([]))
@@ -82,34 +88,35 @@ for f in args.input:
     fileName = os.path.basename(f.name)
     print('Processing', fullPath, '...')
     ds = ssds(f) # use python sdds library to parse the file
-    tehParams = ds.pageData[0]['parameters']
-    tehArrays = ds.pageData[0]['arrays']
-    xRes = tehParams['nbPtsInSet1']['value']
-    yRes = tehParams['nbPtsInSet2']['value']
-    surface1D = tehArrays['imageSet']['value'][0] # grab the image data here
-    surface2D = surface1D.reshape([yRes,xRes])
+    
+    paramValues = Object()
+    # pull out parameter values and put them in paramValues
+    for key,val in ds.pageData[0]['parameters'].items():
+        setattr(paramValues,key,val['value'])
+    
+    arrayValues = Object()
+    # pull out array values and put them in arrayValues
+    for key,val in ds.pageData[0]['arrays'].items():
+        setattr(arrayValues,key,val['value'][0])
 
-    screenSelect = ds.pageData[0]['parameters']['screenSelect']['value']
-    filterSelect = ds.pageData[0]['parameters']['filterSelect']['value']
-    acqCounter = ds.pageData[0]['parameters']['acqCounter']['value']
-    acqDesc = ds.pageData[0]['parameters']['acqDesc']['value']
-    observables = ds.pageData[0]['parameters']['observables']['value']
-    offsetCalSet1 = ds.pageData[0]['arrays']['offsetCalSet1']['value'][0]
-    offsetCalSet2 = ds.pageData[0]['arrays']['offsetCalSet2']['value'][0]
+    xRes = paramValues.nbPtsInSet1
+    yRes = paramValues.nbPtsInSet2
+    surface1D = arrayValues.imageSet # grab the image data here
+    surface2D = surface1D.reshape([yRes,xRes])   
 
     # possibly save the surface to a pgm file in /tmp for inspection
     if args.saveImage:
         tmp = tempfile.gettempdir()
         saveDir = tmp + os.path.sep + 'pgms' + os.path.sep
-        saveFile = saveDir+fileName+'.pgm'
+        pgmFile = saveDir+fileName+'.pgm'
         if not os.path.exists(saveDir):
             os.makedirs(saveDir)
         pgmMax = surface2D.max()
         pgmHeader = 'P2 {:} {:} {:}'.format(xRes,yRes,pgmMax)    
-        np.savetxt(saveFile,surface2D,header=pgmHeader,fmt='%i',comments='')
-        print('Saved:', saveFile)
+        np.savetxt(pgmFile,surface2D,header=pgmHeader,fmt='%i',comments='')
+        print('Saved:', pgmFile)
     else:
-        saveFile = '/dev/null'
+        pgmFile = '/dev/null'
 
     # Create x and y grid
     xv = np.linspace(0, xRes-1, xRes)
@@ -169,21 +176,21 @@ for f in args.input:
     
     twoHrTimezoneOffset = 7200 # seconds
     
-    cycleTime = ds.pageData[0]['parameters']["cycleTime"]['value'].rstrip()[1:-2]
+    cycleTime = paramValues.cycleTime.rstrip()[1:-2]
     cycleTime = datetime.strptime(cycleTime,"%Y/%m/%d %H:%M:%S.%f")
     cycleTimeStamp = cycleTime.timestamp() + twoHrTimezoneOffset
-    acqTime = ds.pageData[0]['parameters']["acqTime"]['value'].rstrip()[1:-2]
+    acqTime = paramValues.acqTime.rstrip()[1:-2]
     acqTime = datetime.strptime(acqTime,"%Y/%m/%d %H:%M:%S.%f")
     acqTimeStamp = acqTime.timestamp() + twoHrTimezoneOffset
     
     logMessages = StringIO()
-    parametersToPrint = ('cycleTime', 'acqTime', 'screenSelect', 'filterSelect')
+    #parametersToPrint = ('cycleTime', 'acqTime', 'screenSelect', 'filterSelect', 'deviceName')
     
-    for parameter in parametersToPrint:
-        val = tehParams[parameter]['value']
-        if type(val) is str:
-            val = val.rstrip()
-        print(parameter,'=',val, file=logMessages)
+    #for parameter in parametersToPrint:
+    #    val = tehParams[parameter]['value']
+    #    if type(val) is str:
+    #        val = val.rstrip()
+    #    print(parameter,'=',val, file=logMessages)
     
     print("Green Line Cut R^2 =", r2, file=logMessages)
     peak = amplitude+baseline
@@ -199,24 +206,24 @@ for f in args.input:
     print("", file=logMessages)
     logMessages.seek(0)
     messages = logMessages.read()
-    print(messages)
     
-    newValues = [fileName, '=HYPERLINK("file://'+saveFile+'")', cycleTimeStamp, acqTimeStamp, r2, peak, amplitude, peakPos[0], peakPos[1], sigma[0], sigma[1], theta, baseline, screenSelect,filterSelect,acqCounter,acqDesc,observables,offsetCalSet1,offsetCalSet2]
-    valuesDict = dict(zip(fieldNames,newValues))
     
-    for key,value in valuesDict.items():
-        setattr(data,key,np.append(getattr(data, key),value))
+    #TODO: need to check mappings for "screen" and "filter" wheels. which is "1" and which is "2"
+    OD = mapperOD.one[paramValues.screenSelect] + mapperOD.two[paramValues.filterSelect]
+    T = 10**(-OD)
+    effectiveBaseline = baseline/T
+    effectivePeak = peak/T
+    effectiveAmplitude = effectivePeak - effectiveBaseline
     
-    if args.csv_out is not None:
-        csvWriter.writerow(valuesDict)
-        args.csv_out.flush()
-    
-    if args.drawPlot:
+    if args.drawPlot or args.saveReport:
         fig, axes = plt.subplots(2, 2,figsize=(8, 6), facecolor='w', edgecolor='k')
         fig.suptitle(fileName, fontsize=10)
         axes[0,0].imshow(surface2D, cmap=plt.cm.copper, origin='bottom',
                   extent=(x.min(), x.max(), y.min(), y.max()))
-        axes[0,0].contour(x, y, fitSurface2D, 3, colors='w')
+        if len(np.unique(fitSurface2D)) is not 1: # this works around a bug in contour()
+            axes[0,0].contour(x, y, fitSurface2D, 3, colors='w')
+        else:
+            print('Warning: contour() bug avoided')
         axes[0,0].plot(AX,AY,'r') # plot line A
         axes[0,0].plot(BX,BY,'g') # plot line B
         axes[0,0].set_title("Image Data")
@@ -243,30 +250,55 @@ for f in args.input:
                 
         axes[0,1].axis('off')
         axes[0,1].text(0,0,messages)
-        plt.show(block=False)
+        if args.drawPlot:
+            plt.show(block=False)
+        if args.saveReport:
+            tmp = tempfile.gettempdir()
+            saveDir = tmp + os.path.sep + 'pdfs' + os.path.sep
+            reportFile = saveDir+fileName+'.report.pdf'
+            if not os.path.exists(saveDir):
+                os.makedirs(saveDir)            
+            plt.savefig(reportFile)
+        else:
+            reportFile = '/dev/null'
+            
+        newValues = [fileName,'=HYPERLINK("file://'+reportFile+'")', '=HYPERLINK("file://'+pgmFile+'")', paramValues.deviceName, paramValues.firstLamp, paramValues.secondLamp,cycleTime, cycleTimeStamp, acqTime, acqTimeStamp, arrayValues.acqTimeInCycle, r2, peak, amplitude, effectiveAmplitude, peakPos[0], peakPos[1], sigma[0], sigma[1], theta, baseline, paramValues.screenSelect, paramValues.filterSelect, OD, paramValues.acqCounter, paramValues.acqDesc, paramValues.observables, arrayValues.offsetCalSet1, arrayValues.offsetCalSet2, paramValues.videoGain]
+        valuesDict = dict(zip(fieldNames,newValues))
+        
+        for key,value in valuesDict.items():
+            setattr(data,key,np.append(getattr(data, key),value))
+        
+        if args.csv_out is not None:
+            csvWriter.writerow(valuesDict)
+            args.csv_out.flush()
+    print(messages)
 
 if args.drawPlot:
     plt.show(block=True)
     
 if args.correlate_proton_intensities is not None:
     iReader = csv.reader(args.correlate_proton_intensities)
-    protonTimes = array.array('d')
+    protonTimeStamps = array.array('d')
     protonIntensities = array.array('d')
+    protonTimes = []
     for row in iReader:
         try:
             protonTime = datetime.strptime(row[0],"%Y-%m-%d %H:%M:%S.%f")
-            protonTimes.append(protonTime.timestamp())
+            protonTimeStamps.append(protonTime.timestamp())
             protonIntensities.append(float(row[1]))
+            protonTimes.append(row[0])
         except:
             pass
-    protonTimes = np.array(protonTimes)
+    protonTimeStamps = np.array(protonTimeStamps)
     protonIntensities = np.array(protonIntensities)
     proton = array.array('d')
     tDelta = array.array('d')
-    nFilesProcessed = len(getattr(data,'Cycle Time'))
+    tString = []
+    nFilesProcessed = len(getattr(data,'Cycle Timestamp'))
     for i in range(nFilesProcessed):
-        cycleDeltas = getattr(data,'Cycle Time')[i] - protonTimes
-        acqDeltas = getattr(data,'Acquisition Time')[i] - protonTimes
+        #TODO: should check for reusage of the same proton time line
+        cycleDeltas = getattr(data,'Cycle Timestamp')[i] - protonTimeStamps
+        acqDeltas = getattr(data,'Acquisition Timestamp')[i] - protonTimeStamps
         cycleArgMin = np.argmin(np.abs(cycleDeltas))
         acqArgMin = np.argmin(np.abs(acqDeltas))
         #print('Match for cycle      time found at proton entry',cycleArgMin,'with delta',cycleDeltas[cycleArgMin],'s')
@@ -275,16 +307,20 @@ if args.correlate_proton_intensities is not None:
             print("Warning cycle timestamp and acqusition timestamp don't match to the same proton intensity!")
             print("The proton intensity difference is", protonIntensities[cycleArgMin] - protonIntensities[acqArgMin])
         proton.append(protonIntensities[acqArgMin])
+        #tDelta.append(cycleDeltas[cycleArgMin])
         tDelta.append(acqDeltas[acqArgMin])
+        tString.append(protonTimes[acqArgMin])
     setattr(data,'Proton Intensity',np.array(proton))
     setattr(data,'Delta from Timber timestamp [s]',np.array(tDelta))
+    setattr(data,'Timber time',np.array(tString))
 
     if args.csv_out is not None:
         # rewrite the whole csv_out
         outName = args.csv_out.name
         args.csv_out.close()
         fieldNames.append('Proton Intensity')
-        fieldNames.append('Delta from Timber timestamp [s]')        
+        fieldNames.append('Delta from Timber timestamp [s]')
+        fieldNames.append('Timber time')
         with open(outName, 'w', newline='') as csvfile:
             newWriter = csv.DictWriter(csvfile,fieldnames=fieldNames)
             newWriter.writeheader()
