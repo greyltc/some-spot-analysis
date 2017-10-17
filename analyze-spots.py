@@ -26,6 +26,7 @@ parser.add_argument('--save-report', dest='saveReport', action='store_true', def
 parser.add_argument('--draw-plot', dest='drawPlot', action='store_true', default=False, help="Draw data plot or each file processed")
 parser.add_argument('--csv-out', type=argparse.FileType('w'), help="Save analysis data to csv file")
 parser.add_argument('--correlate-proton-intensities', type=argparse.FileType('r'), help="Read proton intensities from this file")
+parser.add_argument('--use-parameter-files', dest='pFiles', type=argparse.FileType('r'), nargs='+', help="Read additional timestamed parameters from these files")
 parser.add_argument('input', type=argparse.FileType('rb'), nargs='+', help="File(s) to process")
 args = parser.parse_args()
 
@@ -81,6 +82,16 @@ if args.csv_out is not None:
     csvWriter = csv.DictWriter(args.csv_out,fieldnames=fieldNames)
     csvWriter.writeheader()
     args.csv_out.flush()
+
+if args.pFiles is not None:
+    for p in args.pFiles:
+        fullPath = f.name
+        with open('example.csv') as csvfile:
+            dialect = csv.Sniffer().sniff(csvfile.read(2048))
+            csvfile.seek(0)
+            reader = csv.DictReader(csvfile,dialect=dialect)
+            for row in reader:
+                print(row)    
     
 # loop through each file in the input
 for f in args.input:
