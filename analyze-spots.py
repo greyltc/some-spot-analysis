@@ -25,16 +25,23 @@ parser.add_argument('--save-image', dest='saveImage', action='store_true', defau
 parser.add_argument('--save-report', dest='saveReport', action='store_true', default=False, help="Save analysis report .pdfs to /tmp/pdfs/")
 parser.add_argument('--draw-plot', dest='drawPlot', action='store_true', default=False, help="Draw data plot or each file processed")
 parser.add_argument('--csv-out', type=argparse.FileType('w'), help="Save analysis data to csv file")
-parser.add_argument('--correlate-proton-intensities', type=argparse.FileType('r'), help="Read proton intensities from this file")
-parser.add_argument('--use-parameter-files', dest='pFiles', type=argparse.FileType('r'), nargs='+', help="Read additional timestamed parameters from these files")
+#parser.add_argument('--correlate-proton-intensities', type=argparse.FileType('r'), help="Read proton intensities from this file")
+parser.add_argument('--use-parameter-files', dest='pFiles', type=argparse.FileType('r'), nargs='*', help="Read additional timestamed parameters from these files")
 parser.add_argument('input', type=argparse.FileType('rb'), nargs='+', help="File(s) to process")
 args = parser.parse_args()
+
+twoHrTimezoneOffset = 7200 # seconds
+#twoHrTimezoneOffset = 0 # seconds
 
 # wheel OD mappings
 mapperOD = Object()
 mapperOD.one = np.array([0,0.7,1,2])
 mapperOD.two = np.array([0,0.3,3,5])
 
+# sample pos mapping
+sampleShortNames=['A','B','C','D','E','F','G','H','I','J']
+samplePosses = [8500,11500,16000,17900,20400,23400,26200,29700,32700,50400]
+sampleNames=['SNS GSI-irradiated','SNS Coating on steel, as irradiated in AWAKE tests)','Zirconia, GSI-irradiated position','Zirconia, non-irradiated position','HV 14 (suspension spray)','HV 1','HV 5 - marker spot','HV 7','HV 10 mainly eta phase Alu','HV Yttria']
 # returns a 1d vector representation of the height at position xy of a 2d gaussian surface where
 # amplitude = gaussian peak height
 # xo,yo is the peak's position
@@ -70,6 +77,38 @@ def moments(data):
     return height, x, y, width_x, width_y
 
 fieldNames = ['#File Name','Fit Report', 'Spot Image', 'Device Name', 'First Lamp', 'Second Lamp', 'Cycle Time', 'Cycle Timestamp', 'Acquisition Time', 'Acquisition Timestamp','Time in Cycle [ms]', 'R^2', 'Peak', 'Amplitude', 'Effective Amplitude', 'Center X', 'Center Y', 'Sigma X', 'Sigma Y', 'Rotation', 'Baseline','Screen Select "1"','Filter Select "2"','Optical Density', 'Acq. Counter', 'Acq. Desc.','Observables','OffsetCalSet1','OffsetCalSet2', 'Video Gain']
+
+# load in all the extra timestamped parameters
+# these must be two column csv files, col 0 = string time samp, col 1 = value
+extraParameters = []
+if args.pFiles is not None:
+    for p in args.pFiles:
+        extraParameter = Object()
+        fullPath = p.name
+        with open(fullPath) as csvfile:
+            dialect = csv.Sniffer().sniff(csvfile.read(2048))
+            csvfile.seek(0)
+            reader = csv.DictReader(csvfile,dialect=dialect)
+            timeStamps = array.array('d')
+            values = array.array('d')
+            for row in reader:
+                rowValues = list(row.values())
+                timeString = rowValues[0]
+                time = datetime.strptime(timeString,"%Y-%m-%d %H:%M:%S.%f")
+                timeStamps.append(time.timestamp())
+                values.append(float(rowValues[1]))
+        paramName = list(row.keys())[1]
+        setattr(extraParameter, 'name', list(row.keys())[1])
+        setattr(extraParameter, 'timeStamps', np.array(timeStamps))
+        setattr(extraParameter, 'values', np.array(values))
+        extraParameters.append(extraParameter)
+        fieldNames.append(paramName)
+        if paramName == 'TT66.BTV.660524:SCREEN': # add some more field names in this case
+            fieldNames.append('Sample')
+            fieldNames.append('Sample Description')
+                
+            
+
 data = Object()
 for fieldName in fieldNames:
     setattr(data, fieldName, np.array([]))
@@ -83,15 +122,7 @@ if args.csv_out is not None:
     csvWriter.writeheader()
     args.csv_out.flush()
 
-if args.pFiles is not None:
-    for p in args.pFiles:
-        fullPath = f.name
-        with open('example.csv') as csvfile:
-            dialect = csv.Sniffer().sniff(csvfile.read(2048))
-            csvfile.seek(0)
-            reader = csv.DictReader(csvfile,dialect=dialect)
-            for row in reader:
-                print(row)    
+
     
 # loop through each file in the input
 for f in args.input:
@@ -185,8 +216,6 @@ for f in args.input:
     ss_tot = np.sum((lineBData - np.mean(lineBData)) ** 2)
     r2 = 1 - (ss_res / ss_tot)
     
-    twoHrTimezoneOffset = 7200 # seconds
-    
     cycleTime = paramValues.cycleTime.rstrip()[1:-2]
     cycleTime = datetime.strptime(cycleTime,"%Y/%m/%d %H:%M:%S.%f")
     cycleTimeStamp = cycleTime.timestamp() + twoHrTimezoneOffset
@@ -273,7 +302,29 @@ for f in args.input:
         else:
             reportFile = '/dev/null'
             
-        newValues = [fileName,'=HYPERLINK("file://'+reportFile+'")', '=HYPERLINK("file://'+pgmFile+'")', paramValues.deviceName, paramValues.firstLamp, paramValues.secondLamp,cycleTime, cycleTimeStamp, acqTime, acqTimeStamp, arrayValues.acqTimeInCycle, r2, peak, amplitude, effectiveAmplitude, peakPos[0], peakPos[1], sigma[0], sigma[1], theta, baseline, paramValues.screenSelect, paramValues.filterSelect, OD, paramValues.acqCounter, paramValues.acqDesc, paramValues.observables, arrayValues.offsetCalSet1, arrayValues.offsetCalSet2, paramValues.videoGain]
+        hyperlinkPrefix = '=HYPERLINK("file://'
+            
+        newValues = [fileName, hyperlinkPrefix+reportFile+'")', hyperlinkPrefix+pgmFile+'")', paramValues.deviceName, paramValues.firstLamp, paramValues.secondLamp,cycleTime, cycleTimeStamp, acqTime, acqTimeStamp, arrayValues.acqTimeInCycle, r2, peak, amplitude, effectiveAmplitude, peakPos[0], peakPos[1], sigma[0], sigma[1], theta, baseline, paramValues.screenSelect, paramValues.filterSelect, OD, paramValues.acqCounter, paramValues.acqDesc, paramValues.observables, arrayValues.offsetCalSet1, arrayValues.offsetCalSet2, paramValues.videoGain]
+        
+        for p in extraParameters:
+            #now = cycleTimeStamp
+            now = acqTimeStamp # maybe now should be the acqTimeStamp?
+            theseTimestamps = p.timeStamps
+            if p.name == 'TT66.BTV.660524:SCREEN':
+                theseTimestamps = theseTimestamps - twoHrTimezoneOffset
+            deltas = now - p.timeStamps
+            i = len(deltas[deltas > 0.0]) - 1 # the index of the last positive value
+            closestValue = p.values[i]
+            newValues.append(closestValue)
+            if p.name == 'TT66.BTV.660524:SCREEN':
+                try:
+                    sampleIndex = samplePosses.index(closestValue)
+                    newValues.append(sampleShortNames[sampleIndex])
+                    newValues.append(sampleNames[sampleIndex])
+                except:
+                    newValues.append('X')
+                    newValues.append('Match not found')
+            
         valuesDict = dict(zip(fieldNames,newValues))
         
         for key,value in valuesDict.items():
@@ -286,62 +337,6 @@ for f in args.input:
 
 if args.drawPlot:
     plt.show(block=True)
-    
-if args.correlate_proton_intensities is not None:
-    iReader = csv.reader(args.correlate_proton_intensities)
-    protonTimeStamps = array.array('d')
-    protonIntensities = array.array('d')
-    protonTimes = []
-    for row in iReader:
-        try:
-            protonTime = datetime.strptime(row[0],"%Y-%m-%d %H:%M:%S.%f")
-            protonTimeStamps.append(protonTime.timestamp())
-            protonIntensities.append(float(row[1]))
-            protonTimes.append(row[0])
-        except:
-            pass
-    protonTimeStamps = np.array(protonTimeStamps)
-    protonIntensities = np.array(protonIntensities)
-    proton = array.array('d')
-    tDelta = array.array('d')
-    tString = []
-    nFilesProcessed = len(getattr(data,'Cycle Timestamp'))
-    for i in range(nFilesProcessed):
-        #TODO: should check for reusage of the same proton time line
-        cycleDeltas = getattr(data,'Cycle Timestamp')[i] - protonTimeStamps
-        acqDeltas = getattr(data,'Acquisition Timestamp')[i] - protonTimeStamps
-        cycleArgMin = np.argmin(np.abs(cycleDeltas))
-        acqArgMin = np.argmin(np.abs(acqDeltas))
-        #print('Match for cycle      time found at proton entry',cycleArgMin,'with delta',cycleDeltas[cycleArgMin],'s')
-        #print('Match for acqusition time found at proton entry',acqArgMin,'with delta',acqDeltas[acqArgMin],'s')
-        if cycleArgMin != acqArgMin:
-            print("Warning cycle timestamp and acqusition timestamp don't match to the same proton intensity!")
-            print("The proton intensity difference is", protonIntensities[cycleArgMin] - protonIntensities[acqArgMin])
-        proton.append(protonIntensities[acqArgMin])
-        #tDelta.append(cycleDeltas[cycleArgMin])
-        tDelta.append(acqDeltas[acqArgMin])
-        tString.append(protonTimes[acqArgMin])
-    setattr(data,'Proton Intensity',np.array(proton))
-    setattr(data,'Delta from Timber timestamp [s]',np.array(tDelta))
-    setattr(data,'Timber time',np.array(tString))
-
-    if args.csv_out is not None:
-        # rewrite the whole csv_out
-        outName = args.csv_out.name
-        args.csv_out.close()
-        fieldNames.append('Proton Intensity')
-        fieldNames.append('Delta from Timber timestamp [s]')
-        fieldNames.append('Timber time')
-        with open(outName, 'w', newline='') as csvfile:
-            newWriter = csv.DictWriter(csvfile,fieldnames=fieldNames)
-            newWriter.writeheader()
-            for i in range(nFilesProcessed):
-                values = []
-                for field in fieldNames:
-                    values.append(getattr(data,field)[i])
-                valuesDict = dict(zip(fieldNames,values))
-                newWriter.writerow(valuesDict)
-            csvfile.flush()
 
 if args.csv_out is not None:
     args.csv_out.close()
