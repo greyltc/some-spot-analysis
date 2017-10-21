@@ -25,7 +25,7 @@ parser.add_argument('--save-image', dest='saveImage', action='store_true', defau
 parser.add_argument('--save-report', dest='saveReport', action='store_true', default=False, help="Save analysis report .pdfs to /tmp/pdfs/")
 parser.add_argument('--draw-plot', dest='drawPlot', action='store_true', default=False, help="Draw data plot or each file processed")
 parser.add_argument('--csv-out', type=argparse.FileType('w'), help="Save analysis data to csv file")
-#parser.add_argument('--correlate-proton-intensities', type=argparse.FileType('r'), help="Read proton intensities from this file")
+parser.add_argument("--do-not-fit", dest='dontFit', action='store_true', default=False, help="Do not attempt to fit the data to a 2D gaussian")
 parser.add_argument('--use-parameter-files', dest='pFiles', type=argparse.FileType('r'), nargs='*', help="Read additional timestamed parameters from these files")
 parser.add_argument('input', type=argparse.FileType('rb'), nargs='+', help="File(s) to process")
 args = parser.parse_args()
@@ -144,7 +144,7 @@ for f in args.input:
     xRes = paramValues.nbPtsInSet1
     yRes = paramValues.nbPtsInSet2
     surface1D = arrayValues.imageSet # grab the image data here
-    surface2D = surface1D.reshape([yRes,xRes])   
+    surface2D = surface1D.reshape([yRes,xRes])
 
     # possibly save the surface to a pgm file in /tmp for inspection
     if args.saveImage:
@@ -165,57 +165,67 @@ for f in args.input:
     yv = np.linspace(0, yRes-1, yRes)
     x, y = np.meshgrid(xv, yv)
     
-    # calculate some values we'll use for our initial guess
-    params = moments(surface2D)
-    avg = surface1D.mean()
-    max = surface1D.max()
-    # [amplitude, peakX, peakY, sigmaX, sigmaY, theta(rotation angle), avg (background offset level)]
-    initial_guess = (max-avg, params[2], params[1], params[4], params[3], 0, avg)
+    if not args.dontFit:
+        calcMoment = False
+        if calcMoment:
+            # calculate some values we'll use for our initial guess
+            params = moments(surface2D)
+            avg = surface1D.mean()
+            max = surface1D.max()
+            # [amplitude, peakX, peakY, sigmaX, sigmaY, theta(rotation angle), avg (background offset level)]
+            initial_guess = (max-avg, params[2], params[1], params[4], params[3], 0, avg)
+        else:
+            empiricalGuessVals = (2000, 205, 173, 20, 20, 0, 1100)
+            initial_guess = empiricalGuessVals
+        
+        popt, pcov = opt.curve_fit(twoD_Gaussian, (x, y), surface1D, p0=initial_guess, maxfev=999000)
+        
+        fitSurface1D = twoD_Gaussian((x, y), *popt)
+        fitSurface2D = fitSurface1D.reshape([yRes,xRes])
+        
+        # find sum of square of errors for goodness estimation
+        #residuals = surface1D - fitSurface1D
+        #ss_res = np.sum(residuals**2)
+        #ss_tot = np.sum((surface1D - np.mean(surface1D)) ** 2)
+        #r2 = 1 - (ss_res / ss_tot)
+        
+        # the fit parameters
+        amplitude = popt[0]
+        theta = popt[5]
+        peakPos = (popt[1],popt[2])
+        sigma = (popt[3],popt[4])    
+        baseline = popt[6]
     
-    popt, pcov = opt.curve_fit(twoD_Gaussian, (x, y), surface1D, p0=initial_guess, maxfev=999000)
+        nPoints = 100
+        nSigmas = 4 # line length, number of sigmas to plot in each direction
+        rA = np.linspace(-nSigmas*sigma[0],nSigmas*sigma[0],nPoints) # radii (in polar coords for line A)
+        AX = rA*np.cos(theta-np.pi/4) + peakPos[0] # x values for line A
+        AY = rA*np.sin(theta-np.pi/4) + peakPos[1] # y values for line A
+        
+        rB = np.linspace(-nSigmas*sigma[1],nSigmas*sigma[1],nPoints) # radii (in polar coords for line B)
+        BX = rB*np.cos(theta+np.pi/4) + peakPos[0] # x values for line B
+        BY = rB*np.sin(theta+np.pi/4) + peakPos[1] # y values for line B    
     
-    fitSurface1D = twoD_Gaussian((x, y), *popt)
-    fitSurface2D = fitSurface1D.reshape([yRes,xRes])
+        f = interpolate.interp2d(xv, yv, surface2D) # linear interpolation for data surface
     
-    # find sum of square of errors for goodness estimation
-    #residuals = surface1D - fitSurface1D
-    #ss_res = np.sum(residuals**2)
-    #ss_tot = np.sum((surface1D - np.mean(surface1D)) ** 2)
-    #r2 = 1 - (ss_res / ss_tot)
+        lineAData = np.array([float(f(px,py)) for px,py in zip(AX,AY)])
+        lineAFit = np.array([float(twoD_Gaussian((px, py), *popt)) for px,py in zip(AX,AY)])
     
-    # the fit parameters
-    amplitude = popt[0]
-    theta = popt[5]
-    peakPos = (popt[1],popt[2])
-    sigma = (popt[3],popt[4])    
-    baseline = popt[6]
+        lineBData = np.array([float(f(px,py)) for px,py in zip(BX,BY)])
+        lineBFit = np.array([float(twoD_Gaussian((px, py), *popt)) for px,py in zip(BX,BY)])
     
-    # calculate evaluation lines
-    length = (4*sigma[0],4*sigma[1])
+        residuals = lineBData - lineBFit
+        ss_res = np.sum(residuals**2)
+        ss_tot = np.sum((lineBData - np.mean(lineBData)) ** 2)
+        r2 = 1 - (ss_res / ss_tot)
+    else: # not doing any fitting
+        amplitude = np.nan
+        theta = np.nan
+        peakPos = (np.nan,np.nan)
+        sigma = (np.nan,np.nan)    
+        baseline = np.nan
+        r2 = np.nan
 
-    nPoints = 100
-    nSigmas = 4 # line length, number of sigmas to plot in each direction
-    rA = np.linspace(-nSigmas*sigma[0],nSigmas*sigma[0],nPoints) # radii (in polar coords for line A)
-    AX = rA*np.cos(theta-np.pi/4) + peakPos[0] # x values for line A
-    AY = rA*np.sin(theta-np.pi/4) + peakPos[1] # y values for line A
-    
-    rB = np.linspace(-nSigmas*sigma[1],nSigmas*sigma[1],nPoints) # radii (in polar coords for line B)
-    BX = rB*np.cos(theta+np.pi/4) + peakPos[0] # x values for line B
-    BY = rB*np.sin(theta+np.pi/4) + peakPos[1] # y values for line B    
-
-    f = interpolate.interp2d(xv, yv, surface2D) # linear interpolation for data surface
-
-    lineAData = np.array([float(f(px,py)) for px,py in zip(AX,AY)])
-    lineAFit = np.array([float(twoD_Gaussian((px, py), *popt)) for px,py in zip(AX,AY)])
-
-    lineBData = np.array([float(f(px,py)) for px,py in zip(BX,BY)])
-    lineBFit = np.array([float(twoD_Gaussian((px, py), *popt)) for px,py in zip(BX,BY)])
-
-    residuals = lineBData - lineBFit
-    ss_res = np.sum(residuals**2)
-    ss_tot = np.sum((lineBData - np.mean(lineBData)) ** 2)
-    r2 = 1 - (ss_res / ss_tot)
-    
     cycleTime = paramValues.cycleTime.rstrip()[1:-2]
     cycleTime = datetime.strptime(cycleTime,"%Y/%m/%d %H:%M:%S.%f")
     cycleTimeStamp = cycleTime.timestamp() + twoHrTimezoneOffset
@@ -260,36 +270,37 @@ for f in args.input:
         fig.suptitle(fileName, fontsize=10)
         axes[0,0].imshow(surface2D, cmap=plt.cm.copper, origin='bottom',
                   extent=(x.min(), x.max(), y.min(), y.max()))
-        if len(np.unique(fitSurface2D)) is not 1: # this works around a bug in contour()
-            axes[0,0].contour(x, y, fitSurface2D, 3, colors='w')
-        else:
-            print('Warning: contour() bug avoided')
-        axes[0,0].plot(AX,AY,'r') # plot line A
-        axes[0,0].plot(BX,BY,'g') # plot line B
-        axes[0,0].set_title("Image Data")
-        axes[0,0].set_ylim([y.min(), y.max()])
-        axes[0,0].set_xlim([x.min(), x.max()])
-
-        axes[1,0].plot(rA,lineAData,'r',label='Data')
-        axes[1,0].plot(rA,lineAFit,'k',label='Fit')
-        axes[1,0].set_title('Red Line Cut')
-        axes[1,0].set_xlabel('Distance from center of spot [pixels]')
-        axes[1,0].set_ylabel('Magnitude [counts]')
-        axes[1,0].grid(linestyle='--')
-        handles, labels = axes[1,0].get_legend_handles_labels()
-        axes[1,0].legend(handles, labels)        
-
-        axes[1,1].plot(rB,lineBData,'g',label='Data')
-        axes[1,1].plot(rB,lineBFit,'k',label='Fit')
-        axes[1,1].set_title('Green Line Cut')
-        axes[1,1].set_xlabel('Distance from center of spot [pixels]')
-        axes[1,1].set_ylabel('Magnitude [counts]')
-        axes[1,1].grid(linestyle='--')
-        handles, labels = axes[1,1].get_legend_handles_labels()
-        axes[1,1].legend(handles, labels)           
-                
-        axes[0,1].axis('off')
-        axes[0,1].text(0,0,messages)
+        if not args.dontFit:
+            if len(np.unique(fitSurface2D)) is not 1: # this works around a bug in contour()
+                axes[0,0].contour(x, y, fitSurface2D, 3, colors='w')
+            else:
+                print('Warning: contour() bug avoided')
+            axes[0,0].plot(AX,AY,'r') # plot line A
+            axes[0,0].plot(BX,BY,'g') # plot line B
+            axes[0,0].set_title("Image Data")
+            axes[0,0].set_ylim([y.min(), y.max()])
+            axes[0,0].set_xlim([x.min(), x.max()])
+    
+            axes[1,0].plot(rA,lineAData,'r',label='Data')
+            axes[1,0].plot(rA,lineAFit,'k',label='Fit')
+            axes[1,0].set_title('Red Line Cut')
+            axes[1,0].set_xlabel('Distance from center of spot [pixels]')
+            axes[1,0].set_ylabel('Magnitude [counts]')
+            axes[1,0].grid(linestyle='--')
+            handles, labels = axes[1,0].get_legend_handles_labels()
+            axes[1,0].legend(handles, labels)        
+    
+            axes[1,1].plot(rB,lineBData,'g',label='Data')
+            axes[1,1].plot(rB,lineBFit,'k',label='Fit')
+            axes[1,1].set_title('Green Line Cut')
+            axes[1,1].set_xlabel('Distance from center of spot [pixels]')
+            axes[1,1].set_ylabel('Magnitude [counts]')
+            axes[1,1].grid(linestyle='--')
+            handles, labels = axes[1,1].get_legend_handles_labels()
+            axes[1,1].legend(handles, labels)           
+                    
+            axes[0,1].axis('off')
+            axes[0,1].text(0,0,messages)
         if args.drawPlot:
             plt.show(block=False)
         if args.saveReport:
