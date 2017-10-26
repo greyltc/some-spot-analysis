@@ -5,6 +5,7 @@
 import os
 import tempfile
 import argparse
+from glob import glob
 import numpy as np
 #import mpmath
 import matplotlib.pyplot as plt
@@ -323,9 +324,18 @@ for f in args.input:
             theseTimestamps = p.timeStamps
             if p.name == 'TT66.BTV.660524:SCREEN':
                 theseTimestamps = theseTimestamps - twoHrTimezoneOffset
+            else:
+                theseTimestamps = theseTimestamps - twoHrTimezoneOffset
             deltas = now - p.timeStamps
-            i = len(deltas[deltas > 0.0]) - 1 # the index of the last positive value
+            #print (p.name)
+            if p.name == 'TT66.BTV.660524:SCREEN':
+                i = len(deltas[deltas > 0.0]) - 1 # the index of the last positive value
+            else:
+                i = len(deltas[deltas > 0.0]) - 1 # the index of the first negative value
+                
+            #print ("Looked up", i)
             closestValue = p.values[i]
+            
             newValues.append(closestValue)
             if p.name == 'TT66.BTV.660524:SCREEN':
                 try:
